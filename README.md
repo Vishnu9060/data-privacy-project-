@@ -57,6 +57,4 @@ The frontend will be available at `http://localhost:5173`.
 
 > Both servers need to be running simultaneously for the dashboard to work — the frontend calls the backend API directly from the browser.
 
-## Team
 
-cat 01 — Vikash, Vishnu, Adithya
