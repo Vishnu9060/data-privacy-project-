@@ -10,6 +10,12 @@ function App() {
   const [packetsLoading, setPacketsLoading] = useState(false)
   const [packetsError, setPacketsError] = useState(null)
 
+  const [adapters, setAdapters] = useState(null)
+  const [adaptersLoading, setAdaptersLoading] = useState(false)
+  const [adaptersError, setAdaptersError] = useState(null)
+  const [newMacInput, setNewMacInput] = useState('')
+  const [macLog, setMacLog] = useState([])
+
   const handleScan = async () => {
     setLoading(true)
     setError(null)
@@ -46,6 +52,31 @@ function App() {
     } finally {
       setPacketsLoading(false)
     }
+  }
+
+  const handleShowAdapters = async () => {
+    setAdaptersLoading(true)
+    setAdaptersError(null)
+    setAdapters(null)
+
+    try {
+      const response = await axios.get('http://127.0.0.1:8000/network-adapter-info')
+      if (response.data.error) {
+        setAdaptersError(response.data.error)
+      } else {
+        setAdapters(response.data.adapters)
+      }
+    } catch (err) {
+      setAdaptersError('Failed to reach backend: ' + err.message)
+    } finally {
+      setAdaptersLoading(false)
+    }
+  }
+
+  const handleSaveMacLog = () => {
+    if (!newMacInput.trim()) return
+    setMacLog([...macLog, { value: newMacInput, time: new Date().toLocaleTimeString() }])
+    setNewMacInput('')
   }
 
   return (
@@ -116,6 +147,67 @@ function App() {
             </tbody>
           </table>
         </>
+      )}
+
+      <h1>Privacy Lab (MAC Address Spoofing)</h1>
+      <button onClick={handleShowAdapters} disabled={adaptersLoading}>
+        Show Current MAC Addresses
+      </button>
+
+      {adaptersLoading && <p>Loading adapters...</p>}
+      {adaptersError && <p>Error: {adaptersError}</p>}
+
+      {adapters && (
+        <>
+          <table border="1" cellPadding="8">
+            <thead>
+              <tr>
+                <th>Adapter Name</th>
+                <th>MAC Address</th>
+              </tr>
+            </thead>
+            <tbody>
+              {adapters.map((adapter, index) => (
+                <tr key={index}>
+                  <td>{adapter.name}</td>
+                  <td>{adapter.mac_address}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <pre>
+{`Manual Steps Using SMAC:
+1. Open the SMAC application.
+2. Select your Wi-Fi network adapter from the list.
+3. Enter a new MAC address in SMAC's 'New Spoofed MAC Address' field (use a random value in the format XX:XX:XX:XX:XX:XX).
+4. Click 'Update MAC' in SMAC, then restart the adapter when prompted.
+5. Come back here and click 'Show Current MAC Addresses' again to verify the change.
+6. When finished testing, use SMAC's 'Remove MAC' button to restore your original address, then verify again here.`}
+          </pre>
+        </>
+      )}
+
+      <div>
+        <label>
+          Log the new MAC you set (optional):{' '}
+          <input
+            type="text"
+            value={newMacInput}
+            onChange={(e) => setNewMacInput(e.target.value)}
+          />
+        </label>
+        <button onClick={handleSaveMacLog}>Save to Log</button>
+      </div>
+
+      {macLog.length > 0 && (
+        <ul>
+          {macLog.map((entry, index) => (
+            <li key={index}>
+              [{entry.time}] {entry.value}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

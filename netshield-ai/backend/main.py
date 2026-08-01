@@ -1,3 +1,4 @@
+import psutil
 import nmap
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -79,3 +80,27 @@ def capture_live():
             break
 
     return {"packets": packets}
+
+
+@app.get("/network-adapter-info")
+def network_adapter_info():
+    try:
+        interfaces = psutil.net_if_addrs()
+    except Exception as e:
+        return {"error": f"Failed to read network adapters: {str(e)}"}
+
+    adapters = []
+    for name, addr_list in interfaces.items():
+        for addr in addr_list:
+            if addr.family == psutil.AF_LINK and addr.address:
+                mac_address = addr.address.replace("-", ":").upper()
+                adapters.append({
+                    "name": name,
+                    "mac_address": mac_address,
+                })
+                break
+
+    if not adapters:
+        return {"error": "No network adapters with a MAC address were found."}
+
+    return {"adapters": adapters}
