@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import axios from 'axios'
+import './App.css'
 
 function App() {
   const [devices, setDevices] = useState(null)
@@ -105,111 +106,141 @@ function App() {
     }
   }
 
-  const riskColors = {
-    HIGH: 'red',
-    MEDIUM: 'orange',
-    LOW: 'gray',
-    INFO: 'green',
+  const riskBadgeClasses = {
+    HIGH: 'risk-badge risk-high',
+    MEDIUM: 'risk-badge risk-medium',
+    LOW: 'risk-badge risk-low',
+    INFO: 'risk-badge risk-info',
   }
 
   return (
-    <div>
-      <h1>NetShield AI</h1>
-      <button onClick={handleScan} disabled={loading}>
-        Scan Network
-      </button>
+    <>
+      <header className="topbar">
+        <div className="topbar-brand">
+          <span className="shield-icon">🛡️</span> NetShield AI
+        </div>
+        <div className="topbar-status">
+          <span className="status-dot"></span> System Active
+        </div>
+      </header>
 
-      {loading && <p>Scanning network...</p>}
-      {error && <p>Error: {error}</p>}
+      <div className="app-container">
+        <div className="card">
+          <div className="card-header">
+            <div className="card-icon-badge">🛰️</div>
+            <h2 className="card-heading">Scan Network</h2>
+          </div>
 
-      {devices && (
-        <table border="1" cellPadding="8">
-          <thead>
-            <tr>
-              <th>IP Address</th>
-              <th>Hostname</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {devices.map((device) => (
-              <tr key={device.ip}>
-                <td>{device.ip}</td>
-                <td>{device.hostname}</td>
-                <td>{device.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+          <button className="btn" onClick={handleScan} disabled={loading}>
+            {loading && <span className="spinner" />}
+            Scan Network
+          </button>
 
-      <h1>Packet Analyzer</h1>
-      <button onClick={handleCapture} disabled={packetsLoading}>
-        Capture Live Traffic (15s)
-      </button>
+          {loading && <p className="status-loading">Scanning network...</p>}
+          {error && <p className="status-error">Error: {error}</p>}
 
-      {packetsLoading && <p>Capturing traffic for 15 seconds...</p>}
-      {packetsError && <p>Error: {packetsError}</p>}
-
-      {packets && (
-        <>
-          <p>
-            {packets.length} packets captured —{' '}
-            {packets.filter((p) => p.protocol === 'TCP').length} TCP,{' '}
-            {packets.filter((p) => p.protocol === 'UDP').length} UDP,{' '}
-            {packets.filter((p) => p.protocol !== 'TCP' && p.protocol !== 'UDP').length} other
-          </p>
-          <table border="1" cellPadding="8">
-            <thead>
-              <tr>
-                <th>Source IP</th>
-                <th>Destination IP</th>
-                <th>Protocol</th>
-                <th>Length (bytes)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {packets.slice(0, 50).map((packet, index) => (
-                <tr key={index}>
-                  <td>{packet.source_ip}</td>
-                  <td>{packet.destination_ip}</td>
-                  <td>{packet.protocol}</td>
-                  <td>{packet.length}</td>
+          {devices && (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>Hostname</th>
+                  <th>Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
+              </thead>
+              <tbody>
+                {devices.map((device) => (
+                  <tr key={device.ip}>
+                    <td className="mono">{device.ip}</td>
+                    <td>{device.hostname}</td>
+                    <td>{device.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-      <h1>Privacy Lab (MAC Address Spoofing)</h1>
-      <button onClick={handleShowAdapters} disabled={adaptersLoading}>
-        Show Current MAC Addresses
-      </button>
+        <div className="card">
+          <div className="card-header">
+            <div className="card-icon-badge">🔍</div>
+            <h2 className="card-heading">Packet Analyzer</h2>
+          </div>
 
-      {adaptersLoading && <p>Loading adapters...</p>}
-      {adaptersError && <p>Error: {adaptersError}</p>}
+          <button className="btn" onClick={handleCapture} disabled={packetsLoading}>
+            {packetsLoading && <span className="radar-spinner" />}
+            Capture Live Traffic (15s)
+          </button>
 
-      {adapters && (
-        <>
-          <table border="1" cellPadding="8">
-            <thead>
-              <tr>
-                <th>Adapter Name</th>
-                <th>MAC Address</th>
-              </tr>
-            </thead>
-            <tbody>
-              {adapters.map((adapter, index) => (
-                <tr key={index}>
-                  <td>{adapter.name}</td>
-                  <td>{adapter.mac_address}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {packetsLoading && <p className="status-loading">Capturing traffic for 15 seconds...</p>}
+          {packetsError && <p className="status-error">Error: {packetsError}</p>}
 
-          <pre>
+          {packets && (
+            <>
+              <p className="summary-line">
+                {packets.length} packets captured —{' '}
+                {packets.filter((p) => p.protocol === 'TCP').length} TCP,{' '}
+                {packets.filter((p) => p.protocol === 'UDP').length} UDP,{' '}
+                {packets.filter((p) => p.protocol !== 'TCP' && p.protocol !== 'UDP').length} other
+              </p>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Source IP</th>
+                    <th>Destination IP</th>
+                    <th>Protocol</th>
+                    <th>Length (bytes)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {packets.slice(0, 50).map((packet, index) => (
+                    <tr key={index}>
+                      <td className="mono">{packet.source_ip}</td>
+                      <td className="mono">{packet.destination_ip}</td>
+                      <td>{packet.protocol}</td>
+                      <td>{packet.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="card-icon-badge">🔒</div>
+            <h2 className="card-heading">Privacy Lab (MAC Address Spoofing)</h2>
+          </div>
+
+          <button className="btn" onClick={handleShowAdapters} disabled={adaptersLoading}>
+            {adaptersLoading && <span className="spinner" />}
+            Show Current MAC Addresses
+          </button>
+
+          {adaptersLoading && <p className="status-loading">Loading adapters...</p>}
+          {adaptersError && <p className="status-error">Error: {adaptersError}</p>}
+
+          {adapters && (
+            <>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Adapter Name</th>
+                    <th>MAC Address</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adapters.map((adapter, index) => (
+                    <tr key={index}>
+                      <td>{adapter.name}</td>
+                      <td className="mono">{adapter.mac_address}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <pre className="instructions-block">
 {`Manual Steps Using SMAC:
 1. Open the SMAC application.
 2. Select your Wi-Fi network adapter from the list.
@@ -217,81 +248,96 @@ function App() {
 4. Click 'Update MAC' in SMAC, then restart the adapter when prompted.
 5. Come back here and click 'Show Current MAC Addresses' again to verify the change.
 6. When finished testing, use SMAC's 'Remove MAC' button to restore your original address, then verify again here.`}
-          </pre>
-        </>
-      )}
+              </pre>
+            </>
+          )}
 
-      <div>
-        <label>
-          Log the new MAC you set (optional):{' '}
-          <input
-            type="text"
-            value={newMacInput}
-            onChange={(e) => setNewMacInput(e.target.value)}
-          />
-        </label>
-        <button onClick={handleSaveMacLog}>Save to Log</button>
-      </div>
+          <div className="field-row">
+            <label className="field-label">
+              Log the new MAC you set (optional):
+              <input
+                className="input"
+                type="text"
+                value={newMacInput}
+                onChange={(e) => setNewMacInput(e.target.value)}
+              />
+            </label>
+            <button className="btn" onClick={handleSaveMacLog}>Save to Log</button>
+          </div>
 
-      {macLog.length > 0 && (
-        <ul>
-          {macLog.map((entry, index) => (
-            <li key={index}>
-              [{entry.time}] {entry.value}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <h1>Security Analysis</h1>
-      <label>
-        Target IP:{' '}
-        <input
-          type="text"
-          value={analysisTarget}
-          onChange={(e) => setAnalysisTarget(e.target.value)}
-        />
-      </label>
-      <button onClick={handleRunSecurityScan} disabled={analysisLoading}>
-        Run Security Scan
-      </button>
-
-      {analysisLoading && <p>Scanning for vulnerabilities...</p>}
-      {analysisError && <p>Error: {analysisError}</p>}
-
-      {analysisResults && (
-        <>
-          <p>
-            Found {analysisResults.findings.length} issues —{' '}
-            {analysisResults.summary.high} High,{' '}
-            {analysisResults.summary.medium} Medium,{' '}
-            {analysisResults.summary.low} Low risk
-          </p>
-          <table border="1" cellPadding="8">
-            <thead>
-              <tr>
-                <th>Port</th>
-                <th>Service</th>
-                <th>Risk Level</th>
-                <th>Recommendation</th>
-              </tr>
-            </thead>
-            <tbody>
-              {analysisResults.findings.map((finding, index) => (
-                <tr key={index}>
-                  <td>{finding.port}</td>
-                  <td>{finding.service}</td>
-                  <td style={{ color: riskColors[finding.risk] || 'black' }}>
-                    {finding.risk}
-                  </td>
-                  <td>{finding.reason}</td>
-                </tr>
+          {macLog.length > 0 && (
+            <ul className="log-list">
+              {macLog.map((entry, index) => (
+                <li key={index}>
+                  [{entry.time}] {entry.value}
+                </li>
               ))}
-            </tbody>
-          </table>
-        </>
-      )}
-    </div>
+            </ul>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <div className="card-icon-badge">⚠️</div>
+            <h2 className="card-heading">Security Analysis</h2>
+          </div>
+
+          <div className="field-row">
+            <label className="field-label">
+              Target IP:
+              <input
+                className="input"
+                type="text"
+                value={analysisTarget}
+                onChange={(e) => setAnalysisTarget(e.target.value)}
+              />
+            </label>
+            <button className="btn" onClick={handleRunSecurityScan} disabled={analysisLoading}>
+              {analysisLoading && <span className="radar-spinner" />}
+              Run Security Scan
+            </button>
+          </div>
+
+          {analysisLoading && <p className="status-loading">Scanning for vulnerabilities...</p>}
+          {analysisError && <p className="status-error">Error: {analysisError}</p>}
+
+          {analysisResults && (
+            <>
+              <p className="summary-line">
+                Found {analysisResults.findings.length} issues —{' '}
+                {analysisResults.summary.high} High,{' '}
+                {analysisResults.summary.medium} Medium,{' '}
+                {analysisResults.summary.low} Low risk
+              </p>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Port</th>
+                    <th>Service</th>
+                    <th>Risk Level</th>
+                    <th>Recommendation</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analysisResults.findings.map((finding, index) => (
+                    <tr key={index}>
+                      <td className="mono">{finding.port}</td>
+                      <td>{finding.service}</td>
+                      <td>
+                        <span className={riskBadgeClasses[finding.risk] || 'risk-badge'}>
+                          {finding.risk}
+                        </span>
+                      </td>
+                      <td>{finding.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      </div>
+    </>
   )
 }
 
