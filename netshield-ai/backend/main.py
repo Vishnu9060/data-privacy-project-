@@ -1,6 +1,7 @@
 import nmap
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from scapy.all import sniff, IP, TCP, UDP, ICMP
 
 app = FastAPI()
 
@@ -42,3 +43,39 @@ def scan_network():
         return {"error": "No devices found on the network."}
 
     return {"devices": devices}
+
+
+@app.get("/capture-live")
+def capture_live():
+    try:
+        captured = sniff(timeout=15)
+    except Exception as e:
+        return {"error": f"Capture failed: {str(e)}"}
+
+    packets = []
+    for pkt in captured:
+        if not pkt.haslayer(IP):
+            continue
+
+        ip_layer = pkt[IP]
+
+        if pkt.haslayer(TCP):
+            protocol = "TCP"
+        elif pkt.haslayer(UDP):
+            protocol = "UDP"
+        elif pkt.haslayer(ICMP):
+            protocol = "ICMP"
+        else:
+            protocol = "other"
+
+        packets.append({
+            "source_ip": ip_layer.src,
+            "destination_ip": ip_layer.dst,
+            "protocol": protocol,
+            "length": len(pkt),
+        })
+
+        if len(packets) >= 200:
+            break
+
+    return {"packets": packets}
