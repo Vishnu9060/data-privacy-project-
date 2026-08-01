@@ -22,6 +22,8 @@ function App() {
   const [analysisLoading, setAnalysisLoading] = useState(false)
   const [analysisError, setAnalysisError] = useState(null)
 
+  const [reportData, setReportData] = useState(null)
+
   const handleScan = async () => {
     setLoading(true)
     setError(null)
@@ -103,6 +105,103 @@ function App() {
       setAnalysisError('Failed to reach backend: ' + err.message)
     } finally {
       setAnalysisLoading(false)
+    }
+  }
+
+  const formatReportText = (data) => {
+    const lines = []
+    lines.push('NetShield AI — Security Report')
+    lines.push(`Generated: ${data.timestamp}`)
+    lines.push('')
+
+    lines.push('== Network Discovery ==')
+    if (data.devices) {
+      data.devices.forEach((d) => {
+        lines.push(`${d.ip} — ${d.hostname} — ${d.status}`)
+      })
+    } else {
+      lines.push('Not yet run')
+    }
+    lines.push('')
+
+    lines.push('== Packet Analysis ==')
+    if (data.packets) {
+      const tcp = data.packets.filter((p) => p.protocol === 'TCP').length
+      const udp = data.packets.filter((p) => p.protocol === 'UDP').length
+      const other = data.packets.filter((p) => p.protocol !== 'TCP' && p.protocol !== 'UDP').length
+      lines.push(`${data.packets.length} packets captured — ${tcp} TCP, ${udp} UDP, ${other} other`)
+    } else {
+      lines.push('Not yet run')
+    }
+    lines.push('')
+
+    lines.push('== Privacy Lab ==')
+    if (data.adapters) {
+      data.adapters.forEach((a) => {
+        lines.push(`${a.name} — ${a.mac_address}`)
+      })
+    } else {
+      lines.push('Not yet run')
+    }
+    lines.push('')
+
+    lines.push('== Security Analysis ==')
+    if (data.analysisResults) {
+      lines.push(
+        `Target: ${data.analysisResults.target} — ${data.analysisResults.findings.length} issues found ` +
+          `(${data.analysisResults.summary.high} High, ${data.analysisResults.summary.medium} Medium, ${data.analysisResults.summary.low} Low)`
+      )
+      data.analysisResults.findings.forEach((f) => {
+        lines.push(`Port ${f.port} (${f.service}) — ${f.risk}: ${f.reason}`)
+      })
+    } else {
+      lines.push('Not yet run')
+    }
+
+    return lines.join('\n')
+  }
+
+  const handleSaveReport = async () => {
+    const data = {
+      timestamp: new Date().toLocaleString(),
+      devices,
+      packets,
+      adapters,
+      analysisResults,
+    }
+    setReportData(data)
+
+    const reportText = formatReportText(data)
+
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: 'netshield-security-report.txt',
+          types: [
+            {
+              description: 'Text File',
+              accept: { 'text/plain': ['.txt'] },
+            },
+          ],
+        })
+        const writable = await handle.createWritable()
+        await writable.write(reportText)
+        await writable.close()
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Failed to save report:', err)
+        }
+      }
+    } else {
+      const blob = new Blob([reportText], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'netshield-security-report.txt'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
     }
   }
 
@@ -334,6 +433,94 @@ function App() {
                 </tbody>
               </table>
             </>
+          )}
+        </div>
+
+        <div className="card report-section">
+          <div className="card-header">
+            <div className="card-icon-badge">📄</div>
+            <h2 className="card-heading">Security Report</h2>
+          </div>
+          <p className="report-description">
+            Generate a report summarizing the results from all sections above.
+          </p>
+
+          <button className="btn" onClick={handleSaveReport}>
+            Save Report
+          </button>
+
+          {reportData && (
+            <div className="report-preview">
+              <p className="report-timestamp">Report generated: {reportData.timestamp}</p>
+
+              <div className="report-block">
+                <h3>Network Discovery</h3>
+                {reportData.devices ? (
+                  <ul>
+                    {reportData.devices.map((d) => (
+                      <li key={d.ip}>
+                        {d.ip} — {d.hostname} — {d.status}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>Not yet run — visit that section above</p>
+                )}
+              </div>
+
+              <div className="report-block">
+                <h3>Packet Analysis</h3>
+                {reportData.packets ? (
+                  <p>
+                    {reportData.packets.length} packets captured —{' '}
+                    {reportData.packets.filter((p) => p.protocol === 'TCP').length} TCP,{' '}
+                    {reportData.packets.filter((p) => p.protocol === 'UDP').length} UDP,{' '}
+                    {reportData.packets.filter((p) => p.protocol !== 'TCP' && p.protocol !== 'UDP').length} other
+                  </p>
+                ) : (
+                  <p>Not yet run — visit that section above</p>
+                )}
+              </div>
+
+              <div className="report-block">
+                <h3>Privacy Lab</h3>
+                {reportData.adapters ? (
+                  <ul>
+                    {reportData.adapters.map((a, index) => (
+                      <li key={index}>
+                        {a.name} — {a.mac_address}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>Not yet run — visit that section above</p>
+                )}
+              </div>
+
+              <div className="report-block">
+                <h3>Security Analysis</h3>
+                {reportData.analysisResults ? (
+                  <>
+                    <p>
+                      Target: {reportData.analysisResults.target} —{' '}
+                      {reportData.analysisResults.findings.length} issues found (
+                      {reportData.analysisResults.summary.high} High,{' '}
+                      {reportData.analysisResults.summary.medium} Medium,{' '}
+                      {reportData.analysisResults.summary.low} Low)
+                    </p>
+                    <ul>
+                      {reportData.analysisResults.findings.map((f, index) => (
+                        <li key={index}>
+                          Port {f.port} ({f.service}) — {f.risk}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p>Not yet run — visit that section above</p>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
