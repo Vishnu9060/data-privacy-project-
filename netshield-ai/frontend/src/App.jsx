@@ -16,6 +16,11 @@ function App() {
   const [newMacInput, setNewMacInput] = useState('')
   const [macLog, setMacLog] = useState([])
 
+  const [analysisTarget, setAnalysisTarget] = useState('127.0.0.1')
+  const [analysisResults, setAnalysisResults] = useState(null)
+  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [analysisError, setAnalysisError] = useState(null)
+
   const handleScan = async () => {
     setLoading(true)
     setError(null)
@@ -77,6 +82,34 @@ function App() {
     if (!newMacInput.trim()) return
     setMacLog([...macLog, { value: newMacInput, time: new Date().toLocaleTimeString() }])
     setNewMacInput('')
+  }
+
+  const handleRunSecurityScan = async () => {
+    setAnalysisLoading(true)
+    setAnalysisError(null)
+    setAnalysisResults(null)
+
+    try {
+      const response = await axios.get(
+        `http://127.0.0.1:8000/security-analysis?target=${analysisTarget}`
+      )
+      if (response.data.error) {
+        setAnalysisError(response.data.error)
+      } else {
+        setAnalysisResults(response.data)
+      }
+    } catch (err) {
+      setAnalysisError('Failed to reach backend: ' + err.message)
+    } finally {
+      setAnalysisLoading(false)
+    }
+  }
+
+  const riskColors = {
+    HIGH: 'red',
+    MEDIUM: 'orange',
+    LOW: 'gray',
+    INFO: 'green',
   }
 
   return (
@@ -208,6 +241,55 @@ function App() {
             </li>
           ))}
         </ul>
+      )}
+
+      <h1>Security Analysis</h1>
+      <label>
+        Target IP:{' '}
+        <input
+          type="text"
+          value={analysisTarget}
+          onChange={(e) => setAnalysisTarget(e.target.value)}
+        />
+      </label>
+      <button onClick={handleRunSecurityScan} disabled={analysisLoading}>
+        Run Security Scan
+      </button>
+
+      {analysisLoading && <p>Scanning for vulnerabilities...</p>}
+      {analysisError && <p>Error: {analysisError}</p>}
+
+      {analysisResults && (
+        <>
+          <p>
+            Found {analysisResults.findings.length} issues —{' '}
+            {analysisResults.summary.high} High,{' '}
+            {analysisResults.summary.medium} Medium,{' '}
+            {analysisResults.summary.low} Low risk
+          </p>
+          <table border="1" cellPadding="8">
+            <thead>
+              <tr>
+                <th>Port</th>
+                <th>Service</th>
+                <th>Risk Level</th>
+                <th>Recommendation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {analysisResults.findings.map((finding, index) => (
+                <tr key={index}>
+                  <td>{finding.port}</td>
+                  <td>{finding.service}</td>
+                  <td style={{ color: riskColors[finding.risk] || 'black' }}>
+                    {finding.risk}
+                  </td>
+                  <td>{finding.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   )

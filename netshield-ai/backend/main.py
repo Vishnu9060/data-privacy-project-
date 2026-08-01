@@ -1,3 +1,5 @@
+import ipaddress
+
 import psutil
 import nmap
 from fastapi import FastAPI
@@ -104,3 +106,88 @@ def network_adapter_info():
         return {"error": "No network adapters with a MAC address were found."}
 
     return {"adapters": adapters}
+
+
+def _scan_ports(target: str) -> dict:
+    if not target:
+        return {"error": "Missing required query parameter 'target'."}
+
+    try:
+        ipaddress.ip_address(target)
+    except ValueError:
+        return {"error": f"'{target}' is not a valid IP address."}
+
+    scanner = nmap.PortScanner()
+
+    try:
+        scanner.scan(hosts=target, arguments="-F -sV")
+    except Exception as e:
+        return {"error": f"Scan failed: {str(e)}"}
+
+    if target not in scanner.all_hosts():
+        return {"target": target, "open_ports": []}
+
+    open_ports = []
+    host_info = scanner[target]
+    for proto in host_info.all_protocols():
+        if proto != "tcp":
+            continue
+        for port, port_info in host_info[proto].items():
+            if port_info.get("state") == "open":
+                open_ports.append({
+                    "port": port,
+                    "service": port_info.get("name", "unknown"),
+                    "version": port_info.get("version", "") or "unknown",
+                })
+
+    return {"target": target, "open_ports": open_ports}
+
+
+@app.get("/port-scan")
+def port_scan(target: str = ""):
+    return _scan_ports(target)
+
+
+RISK_TABLE = {
+    21: ("HIGH", "FTP transmits credentials and data unencrypted"),
+    23: ("HIGH", "Telnet transmits everything unencrypted, including passwords"),
+    445: ("HIGH", "SMB has a history of critical exploits (e.g. WannaCry) and shouldn't be exposed"),
+    3389: ("HIGH", "RDP exposed to network scanning is a common ransomware entry point"),
+    135: ("MEDIUM", "Windows RPC endpoint mapper, often targeted for reconnaissance"),
+    5432: ("MEDIUM", "Database port should not be exposed outside trusted networks"),
+    3306: ("MEDIUM", "Database port should not be exposed outside trusted networks"),
+    1433: ("MEDIUM", "Database port should not be exposed outside trusted networks"),
+    80: ("LOW", "Unencrypted web traffic; prefer HTTPS (443) if available"),
+    22: ("INFO", "Standard encrypted service"),
+    443: ("INFO", "Standard encrypted service"),
+}
+
+
+@app.get("/security-analysis")
+def security_analysis(target: str = ""):
+    scan_result = _scan_ports(target)
+
+    if "error" in scan_result:
+        return scan_result
+
+    findings = []
+    summary = {"high": 0, "medium": 0, "low": 0, "info": 0}
+
+    for port_entry in scan_result["open_ports"]:
+        port = port_entry["port"]
+        risk, reason = RISK_TABLE.get(
+            port, ("MEDIUM", "Unrecognized service; verify it is intentional and necessary")
+        )
+        findings.append({
+            "port": port,
+            "service": port_entry["service"],
+            "risk": risk,
+            "reason": reason,
+        })
+        summary[risk.lower()] += 1
+
+    return {
+        "target": scan_result["target"],
+        "findings": findings,
+        "summary": summary,
+    }
