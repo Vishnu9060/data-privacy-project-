@@ -1,4 +1,5 @@
 import ipaddress
+import socket
 
 import psutil
 import nmap
@@ -15,7 +16,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-NETWORK_RANGE = "192.168.1.0/24"
+
+def _get_local_ip() -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _detect_network_range() -> str:
+    local_ip = _get_local_ip()
+
+    try:
+        for addrs in psutil.net_if_addrs().values():
+            for addr in addrs:
+                if addr.family == socket.AF_INET and addr.address == local_ip and addr.netmask:
+                    network = ipaddress.IPv4Network(f"{local_ip}/{addr.netmask}", strict=False)
+                    return str(network)
+    except Exception:
+        pass
+
+    octets = local_ip.split(".")
+    return f"{'.'.join(octets[:3])}.0/24"
+
+
+NETWORK_RANGE = _detect_network_range()
 
 
 @app.get("/")
