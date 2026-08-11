@@ -1003,3 +1003,193 @@ body {
 .host-row-flash td {
   animation: host-row-flash 1.2s ease;
 }
+
+/* ============================================================
+   Footfall Analytics — KPI grid + hand-rolled SVG charts
+   ============================================================ */
+
+.footfall-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.footfall-kpi-tile .stat-tile-num { font-size: 1.4rem; }
+
+.chart-wrap {
+  position: relative;
+}
+
+.footfall-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.chart-gridline {
+  stroke: var(--border-soft);
+  stroke-width: 1;
+}
+
+.chart-axis-label {
+  fill: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.chart-area-fill {
+  fill: var(--primary);
+  opacity: 0.12;
+  stroke: none;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-dot {
+  fill: var(--panel-solid);
+  stroke: var(--primary);
+  stroke-width: 2;
+  cursor: pointer;
+  transition: r 0.1s ease;
+}
+
+.chart-crosshair {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.6;
+}
+
+.chart-tooltip {
+  position: absolute;
+  transform: translate(-50%, -115%);
+  background: #05070c;
+  color: #ffffff;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  z-index: 5;
+}
+
+.chart-tooltip-title {
+  font-family: var(--mono);
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  margin-bottom: 2px;
+}
+
+.chart-tooltip-sub { color: var(--text-dim); font-size: 0.68rem; }
+
+/* ---- Bucket bar charts (frequency / dwell time) ---- */
+
+.bucket-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.bucket-row {
+  display: grid;
+  grid-template-columns: 100px 1fr 40px;
+  align-items: center;
+  gap: 10px;
+}
+
+.bucket-label {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+
+.bucket-track {
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  height: 18px;
+  overflow: hidden;
+}
+
+.bucket-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 6px 4px 4px 6px;
+  transition: width 0.3s ease;
+}
+
+.bucket-value {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--heading);
+  font-weight: 700;
+  text-align: right;
+}
+
+/* ---- Peak-hours heatmap ---- */
+
+.heatmap-wrap { margin-top: 6px; }
+
+.heatmap-grid {
+  display: grid;
+  gap: 3px;
+  align-items: center;
+}
+
+.heatmap-corner { }
+
+.heatmap-hour-label,
+.heatmap-day-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.heatmap-day-label { text-align: right; padding-right: 6px; }
+
+.heatmap-cell {
+  aspect-ratio: 1;
+  min-height: 16px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-soft);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.heatmap-cell:hover {
+  transform: scale(1.15);
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.heatmap-tooltip {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+}
+
+.heatmap-legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: var(--primary);
+}

@@ -13,8 +13,12 @@ import mac_spoof
 import packet_analyzer
 import security_analyzer
 import report_generator
+import footfall_db
+import footfall_analytics
 
 app = FastAPI()
+
+footfall_db.init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -95,14 +99,26 @@ def scan_network():
     for host in scanner.all_hosts():
         host_info = scanner[host]
         hostname = host_info.hostname() or "unknown"
+        mac = host_info["addresses"].get("mac") if "addresses" in host_info else None
         devices.append({
             "ip": host,
             "hostname": hostname,
             "status": host_info.state(),
+            "mac_address": mac,
         })
 
     if not devices:
         return {"error": "No devices found on the network."}
+
+    # Footfall Analytics: every device with a resolvable MAC seen on our
+    # network is a candidate "visitor" sighting — logged alongside the mock
+    # history so the dashboard reflects live activity too.
+    try:
+        macs = [d["mac_address"] for d in devices if d.get("mac_address")]
+        ip_by_mac = {d["mac_address"]: d["ip"] for d in devices if d.get("mac_address")}
+        footfall_db.record_sightings(macs, ip_by_mac=ip_by_mac)
+    except Exception:
+        pass  # footfall logging must never break network discovery
 
     result = {"devices": devices, "scanned_range": network_range}
     if was_narrowed:
@@ -151,6 +167,19 @@ def capture_live(timeout: int = 15, count: int = 200, bpf_filter: str = ""):
             continue
         if row is not None:
             rows.append(row)
+
+    # Footfall Analytics: LAN-local packets carry a real peer device MAC
+    # (internet-bound traffic only ever shows the gateway's MAC — see
+    # packet_analyzer's docstring — so we only log LAN-local sightings).
+    try:
+        macs, ip_by_mac = [], {}
+        for r in rows:
+            if r.get("is_lan") and r.get("src_mac"):
+                macs.append(r["src_mac"])
+                ip_by_mac[r["src_mac"]] = r.get("src_ip")
+        footfall_db.record_sightings(macs, ip_by_mac=ip_by_mac)
+    except Exception:
+        pass
 
     return {"packets": rows, "summary": packet_analyzer.summarize(rows)}
 
@@ -398,3 +427,10 @@ class ReportRequest(BaseModel):
 @app.post("/generate-report")
 def generate_report(req: ReportRequest):
     return report_generator.generate(req.model_dump())
+
+
+@app.get("/footfall/dashboard")
+def footfall_dashboard(days: int = 30):
+    """All Footfall Analytics data in one call: KPIs, visitor trend, repeat
+    frequency, peak-hour heatmap, and dwell-time distribution."""
+    return footfall_analytics.build_dashboard(days=days)

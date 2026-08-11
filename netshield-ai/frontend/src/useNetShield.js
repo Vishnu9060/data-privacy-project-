@@ -44,6 +44,27 @@ export default function useNetShield() {
   const [reportLoading, setReportLoading] = useState(false)
   const [reportError, setReportError] = useState(null)
 
+  const [footfallData, setFootfallData] = useState(null)
+  const [footfallLoading, setFootfallLoading] = useState(false)
+  const [footfallError, setFootfallError] = useState(null)
+
+  const handleLoadFootfall = async () => {
+    setFootfallLoading(true)
+    setFootfallError(null)
+    try {
+      const response = await axios.get(`${API}/footfall/dashboard`)
+      if (response.data.error) {
+        setFootfallError(response.data.error)
+      } else {
+        setFootfallData(response.data)
+      }
+    } catch (err) {
+      setFootfallError('Failed to reach backend: ' + err.message)
+    } finally {
+      setFootfallLoading(false)
+    }
+  }
+
   const handleScan = async () => {
     setLoading(true)
     setError(null)
@@ -372,5 +393,6 @@ export default function useNetShield() {
     analysisTarget, setAnalysisTarget, analysisResults, analysisError,
     reportData, reportLoading, reportError,
     handleRunFullAssessment, handleDownloadPdf,
+    footfallData, footfallLoading, footfallError, handleLoadFootfall,
   }
 }

@@ -98,39 +98,82 @@ def _linux_permanent_mac(interface: str) -> str:
     return current.upper()
 
 
-def _windows_set_mac(interface: str, new_mac: str) -> None:
-    # Windows NIC drivers take the NetworkAddress registry value without
-    # colons. PowerShell's Set-NetAdapterAdvancedProperty is the modern,
-    # documented way to set it (replaces manual registry editing), followed
-    # by a disable/enable cycle so the driver picks up the new value.
-    mac_no_colons = new_mac.replace(":", "")
-    ps_script = (
-        f"Set-NetAdapterAdvancedProperty -Name '{interface}' "
-        f"-RegistryKeyword NetworkAddress -RegistryValue '{mac_no_colons}' -ErrorAction Stop; "
-        f"Disable-NetAdapter -Name '{interface}' -Confirm:$false; "
-        f"Start-Sleep -Seconds 2; "
-        f"Enable-NetAdapter -Name '{interface}' -Confirm:$false"
-    )
-    result = _run(["powershell", "-NoProfile", "-Command", ps_script])
+
+# Not every Windows NIC driver *advertises* NetworkAddress as a configurable
+# "advanced property" — Set-NetAdapterAdvancedProperty only works when it
+# does, and fails with a CIM "No matching ... objects found" error otherwise
+# (seen on some USB/onboard NICs, virtual adapters, and certain Wi-Fi
+# chipsets). Many of those same drivers still *read* the NetworkAddress
+# registry value at bind time even though it's not exposed in that WMI
+# class — this is the classic manual-registry-edit technique older
+# spoofing tools (SMAC/TMAC) used before Set-NetAdapterAdvancedProperty
+# existed. So: try the documented cmdlet first, and only fall back to
+# writing the registry key directly when that specific "not advertised"
+# error occurs — other failures (e.g. permission denied) are surfaced as-is.
+_NET_CLASS_GUID = "{4d36e972-e325-11ce-bfc1-08002be10318}"
+
+
+def _windows_ps_body(interface: str, mac_no_colons: str) -> str:
+    # $mac_no_colons == '' means "restore" (clears the override so Windows
+    # falls back to the adapter's burned-in hardware address).
+    return f"""
+$ErrorActionPreference = 'Stop'
+$iface = '{interface}'
+$mac = '{mac_no_colons}'
+try {{
+    Set-NetAdapterAdvancedProperty -Name $iface -RegistryKeyword NetworkAddress -RegistryValue $mac -ErrorAction Stop
+}} catch {{
+    $err = $_
+    try {{
+        $guid = (Get-NetAdapter -Name $iface).InterfaceGuid
+        $base = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{_NET_CLASS_GUID}'
+        $key = Get-ChildItem $base -ErrorAction Stop | Where-Object {{
+            (Get-ItemProperty $_.PSPath -Name NetCfgInstanceId -ErrorAction SilentlyContinue).NetCfgInstanceId -eq $guid
+        }} | Select-Object -First 1
+        if (-not $key) {{ throw "Could not locate this adapter's driver registry key." }}
+        if ([string]::IsNullOrEmpty($mac)) {{
+            Remove-ItemProperty -Path $key.PSPath -Name NetworkAddress -ErrorAction SilentlyContinue
+        }} else {{
+            Set-ItemProperty -Path $key.PSPath -Name NetworkAddress -Value $mac -Type String
+        }}
+    }} catch {{
+        Write-Error "NOT_SUPPORTED: This adapter's driver does not support MAC address spoofing on Windows ($($err.Exception.Message))"
+        exit 1
+    }}
+}}
+Disable-NetAdapter -Name $iface -Confirm:$false
+Start-Sleep -Seconds 2
+Enable-NetAdapter -Name $iface -Confirm:$false
+Start-Sleep -Seconds 1
+if (-not [string]::IsNullOrEmpty($mac)) {{
+    $actual = (Get-NetAdapter -Name $iface).MacAddress -replace '[:-]', ''
+    if ($actual -ne $mac) {{
+        Write-Error "NOT_SUPPORTED: Adapter driver ignored the requested MAC address (still reports $actual) - this NIC does not support software MAC spoofing on Windows."
+        exit 1
+    }}
+}}
+"""
+
+
+def _windows_run(interface: str, mac_no_colons: str) -> None:
+    result = _run(["powershell", "-NoProfile", "-Command", _windows_ps_body(interface, mac_no_colons)])
     if result.returncode != 0:
-        raise MacSpoofError(
-            f"PowerShell command failed: {result.stderr.strip() or result.stdout.strip()}"
-        )
+        message = result.stderr.strip() or result.stdout.strip()
+        if "NOT_SUPPORTED:" in message:
+            message = message.split("NOT_SUPPORTED:", 1)[1].strip()
+            raise MacSpoofError(
+                f"{message} Try a different physical Wi-Fi/Ethernet adapter from the list — "
+                f"virtual adapters (VPN, Hyper-V, USB dongles) commonly lack this driver support."
+            )
+        raise MacSpoofError(f"PowerShell command failed: {message}")
+
+
+def _windows_set_mac(interface: str, new_mac: str) -> None:
+    _windows_run(interface, new_mac.replace(":", ""))
 
 
 def _windows_restore_mac(interface: str) -> None:
-    ps_script = (
-        f"Set-NetAdapterAdvancedProperty -Name '{interface}' "
-        f"-RegistryKeyword NetworkAddress -RegistryValue '' -ErrorAction Stop; "
-        f"Disable-NetAdapter -Name '{interface}' -Confirm:$false; "
-        f"Start-Sleep -Seconds 2; "
-        f"Enable-NetAdapter -Name '{interface}' -Confirm:$false"
-    )
-    result = _run(["powershell", "-NoProfile", "-Command", ps_script])
-    if result.returncode != 0:
-        raise MacSpoofError(
-            f"PowerShell command failed: {result.stderr.strip() or result.stdout.strip()}"
-        )
+    _windows_run(interface, "")
 
 
 def _macos_set_mac(interface: str, new_mac: str) -> None:

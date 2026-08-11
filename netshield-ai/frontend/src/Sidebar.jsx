@@ -1,5 +1,11 @@
 const NAV_GROUPS = [
   {
+    label: 'Footfall Analytics',
+    items: [
+      { id: 'footfall', icon: '👣', label: 'Shop Visitor Dashboard' },
+    ],
+  },
+  {
     label: 'Security Operations',
     items: [
       { id: 'network', icon: '🛰️', label: 'Network Discovery' },

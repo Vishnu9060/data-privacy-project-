@@ -9,8 +9,10 @@ import PacketSnifferPage from './pages/PacketSnifferPage'
 import MacToolPage from './pages/MacToolPage'
 import PortScannerPage from './pages/PortScannerPage'
 import IntelligencePage from './pages/IntelligencePage'
+import FootfallAnalyticsPage from './pages/FootfallAnalyticsPage'
 
 const PAGES = {
+  footfall: FootfallAnalyticsPage,
   network: NetworkDiscoveryPage,
   packets: PacketSnifferPage,
   mac: MacToolPage,
@@ -19,7 +21,7 @@ const PAGES = {
 }
 
 function App() {
-  const [activePage, setActivePage] = useState('network')
+  const [activePage, setActivePage] = useState('footfall')
   const net = useNetShield()
 
   const PageComponent = PAGES[activePage]

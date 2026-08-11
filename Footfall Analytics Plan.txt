@@ -1,0 +1,17 @@
+Ok, first we need to proceed with some additional requirements. Using all these stuffs i have implemented above, We need to actually build this project used for a real life example or scenario. I chosen this for a real world example like a shop in a shopping mall. Think like this, we own a shop in a shopping mall. Using this project, we need to analyze stuffs related to people visits to our shop.
+
+For that, i need to implement the following changes:
+
+So, In the side dashboard I have 2 set of menu categories. One is Security Operations, that have 4 menus and other one Intelligence which have 1 menu. I need to implement a new menu category above the Security operations menu category named 'Footfall Analytics'.
+
+Under the footfall analytics, i need to analyse 4 main stuffs related to people
+1) Number of peoples visited to our shop
+2) Same people visited (i.e., The frequency of the same persons) visiting our shop
+3) Peak hours visiting our shop
+4) How long a person stays in our shop (i.e, related to total time spent)
+
+For this footfall analytics, i need to analyze all these 4 stuffs for our shop. 
+
+We need to implement those footfall analytics like a proper dashboard with charts, graphs, KPIs and plots. Also there will be scenarios like, when analyzing frequency of peoples/customers, we need some mock data to visualize dashboard trend charts and plots. So, i you need, you can also use a mock data with a simple local sqlite3 db if needed. So that we can efficiently analyse customer scenarios like, if same customers ip got connected, we can help analyse it like that. And one more thing, we not gonna use any cctv, camera 0r anyother iot related stuffs. We just gona analyse it using a mock data using the existing data. then, new data are also added in that. Then, whenever the data including this new data is detected, it analyses the footfalls
+
+What did you think about it? Tell me before we proceed with.

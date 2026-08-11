@@ -4,3 +4,4 @@ __pycache__/
 *.pid
 venv/
 .env
+footfall.db
