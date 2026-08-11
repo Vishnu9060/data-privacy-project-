@@ -1,0 +1,6 @@
+# Backend dependencies for netshield-ai (see netshield-ai/backend/requirements.txt for pinned versions)
+fastapi==0.141.1
+uvicorn==0.52.1
+psutil==7.2.2
+python-nmap==0.7.1
+scapy==2.7.0

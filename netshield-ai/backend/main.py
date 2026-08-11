@@ -1,11 +1,18 @@
 import ipaddress
+import platform
 import socket
 
 import psutil
 import nmap
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from scapy.all import sniff, IP, TCP, UDP, ICMP
+from pydantic import BaseModel
+from scapy.all import sniff
+
+import mac_spoof
+import packet_analyzer
+import security_analyzer
+import report_generator
 
 app = FastAPI()
 
@@ -28,7 +35,24 @@ def _get_local_ip() -> str:
         s.close()
 
 
-def _detect_network_range() -> str:
+# Cap how large a subnet we'll ever ping-sweep. Large institutional/campus
+# Wi-Fi commonly hands out /19 or bigger (thousands of addresses) on one
+# segment; fully scanning that from a student laptop is slow (minutes, even
+# with aggressive timing) and unnecessary — everything interesting is near
+# our own IP. Anything wider than /24 gets narrowed to a /24 around our IP.
+MAX_SCAN_PREFIXLEN = 24
+
+
+def _detect_network_range() -> tuple[str, bool]:
+    """Detect the current local subnet to scan.
+
+    Re-run on every /scan call (not cached at import time) so it reflects
+    whatever network we're on right now — Wi-Fi can change between when the
+    backend was started and when a scan actually runs.
+
+    Returns (cidr, was_narrowed) — was_narrowed is True if the real subnet
+    was bigger than /24 and got clamped for scan speed/safety.
+    """
     local_ip = _get_local_ip()
 
     try:
@@ -36,15 +60,17 @@ def _detect_network_range() -> str:
             for addr in addrs:
                 if addr.family == socket.AF_INET and addr.address == local_ip and addr.netmask:
                     network = ipaddress.IPv4Network(f"{local_ip}/{addr.netmask}", strict=False)
-                    return str(network)
+                    if network.prefixlen < MAX_SCAN_PREFIXLEN:
+                        narrowed = ipaddress.IPv4Network(
+                            f"{local_ip}/{MAX_SCAN_PREFIXLEN}", strict=False
+                        )
+                        return str(narrowed), True
+                    return str(network), False
     except Exception:
         pass
 
     octets = local_ip.split(".")
-    return f"{'.'.join(octets[:3])}.0/24"
-
-
-NETWORK_RANGE = _detect_network_range()
+    return f"{'.'.join(octets[:3])}.0/24", False
 
 
 @app.get("/")
@@ -54,10 +80,14 @@ def read_root():
 
 @app.get("/scan")
 def scan_network():
-    scanner = nmap.PortScanner()
+    network_range, was_narrowed = _detect_network_range()
 
     try:
-        scanner.scan(hosts=NETWORK_RANGE, arguments="-sn")
+        scanner = nmap.PortScanner()
+        # -sn: ping scan (no port scan). -T4: aggressive timing.
+        # --host-timeout 2s: don't wait long on empty addresses, which is
+        # what makes a full-subnet scan feel slow.
+        scanner.scan(hosts=network_range, arguments="-sn -T4 --host-timeout 2s")
     except Exception as e:
         return {"error": f"Scan failed: {str(e)}"}
 
@@ -74,43 +104,55 @@ def scan_network():
     if not devices:
         return {"error": "No devices found on the network."}
 
-    return {"devices": devices}
+    result = {"devices": devices, "scanned_range": network_range}
+    if was_narrowed:
+        result["note"] = (
+            f"Your network's actual subnet is larger than /24, so the scan was "
+            f"narrowed to {network_range} (around your own IP) for speed. "
+            f"Devices outside this range won't appear."
+        )
+    return result
 
 
 @app.get("/capture-live")
-def capture_live():
+def capture_live(timeout: int = 15, count: int = 200, bpf_filter: str = ""):
+    """Capture live traffic and dissect it Wireshark-style.
+
+    Query params:
+      timeout    - seconds to sniff (default 15)
+      count      - max packets to return (default 200)
+      bpf_filter - optional Berkeley Packet Filter (e.g. "port 53" for DNS,
+                   "tcp port 80" for HTTP, "icmp" for ping), same syntax
+                   Wireshark uses.
+    """
     try:
-        captured = sniff(timeout=15)
+        sniff_kwargs = {"timeout": timeout, "count": count}
+        if bpf_filter.strip():
+            sniff_kwargs["filter"] = bpf_filter.strip()
+        captured = sniff(**sniff_kwargs)
     except Exception as e:
         return {"error": f"Capture failed: {str(e)}"}
 
-    packets = []
+    # Used to flag which captured packets are LAN-local (both endpoints on
+    # our own subnet, e.g. talking to a teammate's laptop) vs internet-bound.
+    range_str, _ = _detect_network_range()
+    try:
+        local_network = ipaddress.ip_network(range_str, strict=False)
+    except ValueError:
+        local_network = None
+
+    rows = []
     for pkt in captured:
-        if not pkt.haslayer(IP):
+        try:
+            row = packet_analyzer.dissect_packet(pkt, local_network=local_network)
+        except Exception:
+            # A single malformed/unexpected packet must never abort the whole
+            # capture — skip it and keep dissecting the rest.
             continue
+        if row is not None:
+            rows.append(row)
 
-        ip_layer = pkt[IP]
-
-        if pkt.haslayer(TCP):
-            protocol = "TCP"
-        elif pkt.haslayer(UDP):
-            protocol = "UDP"
-        elif pkt.haslayer(ICMP):
-            protocol = "ICMP"
-        else:
-            protocol = "other"
-
-        packets.append({
-            "source_ip": ip_layer.src,
-            "destination_ip": ip_layer.dst,
-            "protocol": protocol,
-            "length": len(pkt),
-        })
-
-        if len(packets) >= 200:
-            break
-
-    return {"packets": packets}
+    return {"packets": rows, "summary": packet_analyzer.summarize(rows)}
 
 
 @app.get("/network-adapter-info")
@@ -137,6 +179,80 @@ def network_adapter_info():
     return {"adapters": adapters}
 
 
+class ChangeMacRequest(BaseModel):
+    interface: str
+    new_mac: str | None = None  # if omitted, a random MAC is generated
+
+
+class RestoreMacRequest(BaseModel):
+    interface: str
+
+
+@app.post("/privacy-lab/change-mac")
+def change_mac(req: ChangeMacRequest):
+    before = network_adapter_info()
+    if "error" in before:
+        return before
+    before_mac = next(
+        (a["mac_address"] for a in before["adapters"] if a["name"] == req.interface), None
+    )
+    if before_mac is None:
+        return {"error": f"Interface '{req.interface}' was not found."}
+
+    new_mac = req.new_mac.strip().upper() if req.new_mac else mac_spoof.generate_random_mac()
+
+    try:
+        mac_spoof.set_mac_address(req.interface, new_mac, current_mac=before_mac)
+    except mac_spoof.MacSpoofError as e:
+        return {"error": str(e)}
+
+    after = network_adapter_info()
+    if "error" in after:
+        return after
+    after_mac = next(
+        (a["mac_address"] for a in after["adapters"] if a["name"] == req.interface), None
+    )
+
+    return {
+        "interface": req.interface,
+        "before_mac": before_mac,
+        "after_mac": after_mac,
+        "requested_mac": new_mac,
+        "success": after_mac == new_mac,
+    }
+
+
+@app.post("/privacy-lab/restore-mac")
+def restore_mac(req: RestoreMacRequest):
+    before = network_adapter_info()
+    if "error" in before:
+        return before
+    before_mac = next(
+        (a["mac_address"] for a in before["adapters"] if a["name"] == req.interface), None
+    )
+    if before_mac is None:
+        return {"error": f"Interface '{req.interface}' was not found."}
+
+    try:
+        mac_spoof.restore_mac_address(req.interface)
+    except mac_spoof.MacSpoofError as e:
+        return {"error": str(e)}
+
+    after = network_adapter_info()
+    if "error" in after:
+        return after
+    after_mac = next(
+        (a["mac_address"] for a in after["adapters"] if a["name"] == req.interface), None
+    )
+
+    return {
+        "interface": req.interface,
+        "before_mac": before_mac,
+        "after_mac": after_mac,
+        "success": after_mac != before_mac,
+    }
+
+
 def _scan_ports(target: str) -> dict:
     if not target:
         return {"error": "Missing required query parameter 'target'."}
@@ -146,10 +262,14 @@ def _scan_ports(target: str) -> dict:
     except ValueError:
         return {"error": f"'{target}' is not a valid IP address."}
 
-    scanner = nmap.PortScanner()
-
     try:
-        scanner.scan(hosts=target, arguments="-F -sV")
+        scanner = nmap.PortScanner()
+        # -F: fast scan (top 100 ports). -sV: full service/version detection
+        # (more probes than --version-light, catches versions light mode
+        # misses, at negligible extra cost once a port is known to be open).
+        # -T4: aggressive timing. --host-timeout caps the total so a
+        # filtered/slow host can't hang the request.
+        scanner.scan(hosts=target, arguments="-F -sV -T4 --host-timeout 30s")
     except Exception as e:
         return {"error": f"Scan failed: {str(e)}"}
 
@@ -177,46 +297,104 @@ def port_scan(target: str = ""):
     return _scan_ports(target)
 
 
-RISK_TABLE = {
-    21: ("HIGH", "FTP transmits credentials and data unencrypted"),
-    23: ("HIGH", "Telnet transmits everything unencrypted, including passwords"),
-    445: ("HIGH", "SMB has a history of critical exploits (e.g. WannaCry) and shouldn't be exposed"),
-    3389: ("HIGH", "RDP exposed to network scanning is a common ransomware entry point"),
-    135: ("MEDIUM", "Windows RPC endpoint mapper, often targeted for reconnaissance"),
-    5432: ("MEDIUM", "Database port should not be exposed outside trusted networks"),
-    3306: ("MEDIUM", "Database port should not be exposed outside trusted networks"),
-    1433: ("MEDIUM", "Database port should not be exposed outside trusted networks"),
-    80: ("LOW", "Unencrypted web traffic; prefer HTTPS (443) if available"),
-    22: ("INFO", "Standard encrypted service"),
-    443: ("INFO", "Standard encrypted service"),
-}
+def _host_scan(target: str) -> dict:
+    """Deep per-host scan: OS detection + TCP ports + services + versions.
+
+    This is deliberately a separate, on-demand endpoint (not run for every
+    host during /scan) because nmap's OS fingerprinting (-O) is slow
+    (several seconds per host) and only a best-effort guess, not a
+    certainty — running it automatically for every discovered device would
+    make network discovery painfully slow for no benefit on hosts the user
+    doesn't care about.
+    """
+    if not target:
+        return {"error": "Missing required query parameter 'target'."}
+
+    try:
+        ipaddress.ip_address(target)
+    except ValueError:
+        return {"error": f"'{target}' is not a valid IP address."}
+
+    try:
+        scanner = nmap.PortScanner()
+        # -O: OS detection (needs root, which this backend runs as).
+        # -sV: full service/version detection (more probes than
+        # --version-light, so it actually pulls a version where the light
+        # variant would give up and say "unknown").
+        # -F: fast scan (top 100 ports) so this stays reasonably quick.
+        # --osscan-guess: report a best-effort guess even with imperfect
+        # matches, since real-world hosts rarely fingerprint perfectly.
+        scanner.scan(
+            hosts=target,
+            arguments="-F -O --osscan-guess -sV -T4 --host-timeout 45s",
+        )
+    except Exception as e:
+        return {"error": f"Scan failed: {str(e)}"}
+
+    if target not in scanner.all_hosts():
+        return {"target": target, "hostname": "unknown", "os_matches": [], "open_ports": []}
+
+    host_info = scanner[target]
+
+    # OS detection results: nmap ranks candidate OS matches by accuracy %.
+    os_matches = []
+    if "osmatch" in host_info:
+        for match in host_info["osmatch"][:3]:
+            os_matches.append({
+                "name": match.get("name", "unknown"),
+                "accuracy": match.get("accuracy", "0"),
+            })
+
+    open_ports = []
+    for proto in host_info.all_protocols():
+        if proto != "tcp":
+            continue
+        for port, port_info in host_info[proto].items():
+            if port_info.get("state") == "open":
+                open_ports.append({
+                    "port": port,
+                    "service": port_info.get("name", "unknown"),
+                    "product": port_info.get("product", "") or "",
+                    "version": port_info.get("version", "") or "unknown",
+                    "extrainfo": port_info.get("extrainfo", "") or "",
+                })
+
+    return {
+        "target": target,
+        "hostname": host_info.hostname() or "unknown",
+        "os_matches": os_matches,
+        "open_ports": open_ports,
+    }
+
+
+@app.get("/host-scan")
+def host_scan(target: str = ""):
+    return _host_scan(target)
+
+
+def _os_key() -> str:
+    system = platform.system()
+    if system == "Windows":
+        return "windows"
+    return "linux"  # Linux/macOS both use ufw/iptables-style examples
 
 
 @app.get("/security-analysis")
 def security_analysis(target: str = ""):
     scan_result = _scan_ports(target)
-
     if "error" in scan_result:
         return scan_result
+    return security_analyzer.analyze(scan_result, os_name=_os_key())
 
-    findings = []
-    summary = {"high": 0, "medium": 0, "low": 0, "info": 0}
 
-    for port_entry in scan_result["open_ports"]:
-        port = port_entry["port"]
-        risk, reason = RISK_TABLE.get(
-            port, ("MEDIUM", "Unrecognized service; verify it is intentional and necessary")
-        )
-        findings.append({
-            "port": port,
-            "service": port_entry["service"],
-            "risk": risk,
-            "reason": reason,
-        })
-        summary[risk.lower()] += 1
+class ReportRequest(BaseModel):
+    devices: list | None = None
+    packets: list | None = None
+    packet_summary: dict | None = None
+    adapters: list | None = None
+    security: dict | None = None
 
-    return {
-        "target": scan_result["target"],
-        "findings": findings,
-        "summary": summary,
-    }
+
+@app.post("/generate-report")
+def generate_report(req: ReportRequest):
+    return report_generator.generate(req.model_dump())
