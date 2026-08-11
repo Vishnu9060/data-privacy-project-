@@ -2,12 +2,12 @@ import { useState } from 'react'
 import './App.css'
 import useNetShield from './useNetShield'
 import Sidebar from './Sidebar'
-import TopBar from './TopBar'
 import ErrorBoundary from './ErrorBoundary'
 import NetworkDiscoveryPage from './pages/NetworkDiscoveryPage'
 import PacketSnifferPage from './pages/PacketSnifferPage'
 import MacToolPage from './pages/MacToolPage'
 import PortScannerPage from './pages/PortScannerPage'
+import WifiSecurityPage from './pages/WifiSecurityPage'
 import IntelligencePage from './pages/IntelligencePage'
 
 const PAGES = {
@@ -15,11 +15,12 @@ const PAGES = {
   packets: PacketSnifferPage,
   mac: MacToolPage,
   ports: PortScannerPage,
+  wifi: WifiSecurityPage,
   intelligence: IntelligencePage,
 }
 
 function App() {
-  const [activePage, setActivePage] = useState('network')
+  const [activePage, setActivePage] = useState('wifi')
   const net = useNetShield()
 
   const PageComponent = PAGES[activePage]
@@ -31,15 +32,6 @@ function App() {
         ? net.adapters[0].mac_address
         : null
 
-  const gateway =
-    net.devices && net.devices.length > 0
-      ? (net.devices.find((d) => d.hostname && d.hostname !== 'unknown') || net.devices[0]).ip
-      : null
-
-  const activeNodes = net.devices ? net.devices.length : 0
-
-  const isBusy = net.loading || net.packetsLoading || net.reportLoading || net.macChangeLoading
-
   return (
     <div className="shell">
       <Sidebar
@@ -49,7 +41,6 @@ function App() {
         onRandomize={net.handleRandomizeMac}
         macLoading={net.macChangeLoading}
       />
-      <TopBar gateway={gateway} activeNodes={activeNodes} isScanning={isBusy} />
       <main className="main">
         <ErrorBoundary key={activePage}>
           <PageComponent net={net} />

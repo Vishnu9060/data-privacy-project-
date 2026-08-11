@@ -2,15 +2,11 @@ const NAV_GROUPS = [
   {
     label: 'Security Operations',
     items: [
+      { id: 'wifi', icon: '📶', label: 'Wi-Fi Security' },
       { id: 'network', icon: '🛰️', label: 'Network Discovery' },
       { id: 'packets', icon: '🔍', label: 'Packet Sniffer' },
       { id: 'mac', icon: '🔒', label: 'MAC Address Tool' },
       { id: 'ports', icon: '⚠️', label: 'Port Scanner' },
-    ],
-  },
-  {
-    label: 'Intelligence',
-    items: [
       { id: 'intelligence', icon: '🧠', label: 'Threat Analysis & AI Reports' },
     ],
   },
@@ -21,7 +17,10 @@ export default function Sidebar({ activePage, onNavigate, currentMac, onRandomiz
     <aside className="sidebar">
       <div className="sidebar-brand">
         <span className="brand-mark">Σ</span>
-        NETSEC AI
+        <div className="sidebar-brand-text">
+          <div className="sidebar-brand-title">NETSEC AI</div>
+          <div className="sidebar-brand-subtitle">Commercial Building Security Analysis</div>
+        </div>
       </div>
 
       {NAV_GROUPS.map((group) => (

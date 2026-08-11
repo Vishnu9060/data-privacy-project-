@@ -59,32 +59,48 @@ def _service_for_port(sport: int, dport: int) -> str | None:
     return None
 
 
-def _dissect_dns(pkt) -> tuple[str, str]:
-    """Return (protocol, info) for a DNS packet."""
+# DNS query type codes -> mnemonic, the way Wireshark's "Type" column shows
+# them (A = IPv4 address, AAAA = IPv6 address, 65 = HTTPS/SVCB record, etc.)
+DNS_QTYPES = {
+    1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX",
+    16: "TXT", 28: "AAAA", 33: "SRV", 65: "HTTPS", 255: "ANY",
+}
+
+
+def _dissect_dns(pkt) -> tuple[str, str, dict]:
+    """Return (protocol, info, extra) for a DNS packet.
+
+    `extra` carries the structured fields (domain queried, query type, and
+    whether this row is the query or the response) that a flat "info" string
+    can't cleanly expose to the frontend's dedicated DNS Queries table.
+    """
     dns = pkt[DNS]
+    qname = "?"
+    qtype_code = None
+    if dns.qd is not None and hasattr(dns.qd, "qname"):
+        qname = dns.qd.qname.decode(errors="replace").rstrip(".")
+        qtype_code = getattr(dns.qd, "qtype", None)
+    qtype = DNS_QTYPES.get(qtype_code, str(qtype_code) if qtype_code is not None else "?")
+
     if dns.qr == 0:  # query
-        if dns.qd is not None:
-            qname = dns.qd.qname.decode(errors="replace").rstrip(".") if hasattr(dns.qd, "qname") else "?"
-            return "DNS", f"Standard query for {qname}"
-        return "DNS", "Standard query"
-    else:  # response
-        qname = "?"
-        if dns.qd is not None and hasattr(dns.qd, "qname"):
-            qname = dns.qd.qname.decode(errors="replace").rstrip(".")
-        answers = []
-        # dns.an is a linked list of answer records
-        rr = dns.an
-        count = 0
-        while rr is not None and count < 5:
-            if hasattr(rr, "rdata"):
-                rdata = rr.rdata
-                if isinstance(rdata, bytes):
-                    rdata = rdata.decode(errors="replace")
-                answers.append(str(rdata))
-            rr = rr.payload if rr.payload and rr.payload.name == "DNS Resource Record" else None
-            count += 1
-        answer_str = ", ".join(answers) if answers else "no records"
-        return "DNS", f"Standard query response for {qname}: {answer_str}"
+        extra = {"dns_query": True, "dns_domain": qname, "dns_qtype": qtype}
+        return "DNS", f"Standard query for {qname}", extra
+
+    # response
+    answers = []
+    rr = dns.an
+    count = 0
+    while rr is not None and count < 5:
+        if hasattr(rr, "rdata"):
+            rdata = rr.rdata
+            if isinstance(rdata, bytes):
+                rdata = rdata.decode(errors="replace")
+            answers.append(str(rdata))
+        rr = rr.payload if rr.payload and rr.payload.name == "DNS Resource Record" else None
+        count += 1
+    answer_str = ", ".join(answers) if answers else "no records"
+    extra = {"dns_query": False, "dns_domain": qname, "dns_qtype": qtype}
+    return "DNS", f"Standard query response for {qname}: {answer_str}", extra
 
 
 def _dissect_http_request(pkt) -> tuple[str, str]:
@@ -128,7 +144,7 @@ def _classify_activity(protocol: str, info: str, sport, dport) -> str:
         if info.startswith("GET") or info.startswith("Response"):
             return "Browsing"
         return "Browsing"
-    if protocol in ("HTTPS", "HTTPS/TLS"):
+    if protocol in ("HTTPS", "HTTPS/TLS", "QUIC"):
         return "Browsing"
     if protocol == "FTP" or protocol == "FTP-DATA":
         return "Downloading"
@@ -146,6 +162,7 @@ def dissect_packet(pkt, local_network: "ipaddress.IPv4Network | None" = None) ->
     no IP/ARP layer).
     """
     length = len(pkt)
+    timestamp = float(pkt.time) if hasattr(pkt, "time") else None
 
     # Ethernet MACs, when captured on a wired/Wi-Fi interface that exposes
     # the link layer. For internet-bound traffic, dst_mac is the LAN
@@ -192,6 +209,9 @@ def dissect_packet(pkt, local_network: "ipaddress.IPv4Network | None" = None) ->
             "info": f"Who has {arp.pdst}? Tell {arp.psrc}" if arp.op == 1 else f"{arp.psrc} is at {arp.hwsrc}",
             "is_lan": True,
             "activity": "Other",
+            "timestamp": timestamp,
+            "src_port": None,
+            "dst_port": None,
         }
 
     # Must have an IPv4 or IPv6 layer beyond here.
@@ -206,12 +226,12 @@ def dissect_packet(pkt, local_network: "ipaddress.IPv4Network | None" = None) ->
 
     is_lan = is_lan_ip(src) and is_lan_ip(dst)
 
-    def row(protocol, info, sport=None, dport=None):
+    def row(protocol, info, sport=None, dport=None, extra=None):
         # src_ip/dst_ip keep the bare address (no port) so aggregation stays
         # correct for IPv6, whose addresses themselves contain colons.
         source = f"{src}:{sport}" if sport is not None else src
         destination = f"{dst}:{dport}" if dport is not None else dst
-        return {
+        result = {
             "source": source,
             "destination": destination,
             "src_ip": src,
@@ -223,20 +243,38 @@ def dissect_packet(pkt, local_network: "ipaddress.IPv4Network | None" = None) ->
             "info": info,
             "is_lan": is_lan,
             "activity": _classify_activity(protocol, info, sport, dport),
+            "timestamp": timestamp,
+            "src_port": sport,
+            "dst_port": dport,
         }
+        if extra:
+            result.update(extra)
+        return result
 
-    # ICMP (ping, unreachable, etc.)
+    # ICMP (ping, unreachable, etc.) — split into the subtypes the ICMP
+    # Statistics panel needs: echo request (a ping going out), echo reply
+    # (the response), and everything else (unreachable, TTL exceeded, etc.).
     if pkt.haslayer(ICMP):
         icmp = pkt[ICMP]
         icmp_types = {0: "Echo (ping) reply", 8: "Echo (ping) request", 3: "Destination unreachable", 11: "Time exceeded"}
-        return row("ICMP", icmp_types.get(icmp.type, f"Type {icmp.type}"))
+        if icmp.type == 8:
+            icmp_kind = "echo_request"
+        elif icmp.type == 0:
+            icmp_kind = "echo_reply"
+        else:
+            icmp_kind = "other"
+        return row("ICMP", icmp_types.get(icmp.type, f"Type {icmp.type}"), extra={"icmp_kind": icmp_kind})
 
     # DNS can ride on UDP or TCP; check it before generic UDP/TCP handling.
     if pkt.haslayer(DNS):
-        protocol, info = _dissect_dns(pkt)
+        protocol, info, dns_extra = _dissect_dns(pkt)
         sport = pkt.sport if hasattr(pkt, "sport") else 0
         dport = pkt.dport if hasattr(pkt, "dport") else 0
-        return row(protocol, info, sport, dport)
+        # A query goes to the resolver (dst is the DNS server); a response
+        # comes from it (src is the DNS server) — surface that server IP
+        # either way, for the "DNS Server" column.
+        dns_extra["dns_server"] = dst if dns_extra.get("dns_query") else src
+        return row(protocol, info, sport, dport, extra=dns_extra)
 
     if pkt.haslayer(TCP):
         tcp = pkt[TCP]
@@ -273,9 +311,15 @@ def dissect_packet(pkt, local_network: "ipaddress.IPv4Network | None" = None) ->
     if pkt.haslayer(UDP):
         udp = pkt[UDP]
         sport, dport = udp.sport, udp.dport
+        udp_len = udp.len if udp.len is not None else len(udp)
+        # QUIC (RFC 9000) is UDP/443 by convention — the transport behind
+        # HTTP/3, now the default for Chrome/YouTube/most Google traffic.
+        # Without this check it silently falls into the generic UDP bucket,
+        # hiding what is often the largest single slice of browsing traffic.
+        if sport == 443 or dport == 443:
+            return row("QUIC", f"{sport} → {dport} Len={udp_len}", sport, dport)
         service = _service_for_port(sport, dport)
         protocol = service or "UDP"
-        udp_len = udp.len if udp.len is not None else len(udp)
         return row(protocol, f"{sport} → {dport} Len={udp_len}", sport, dport)
 
     # IP packet we didn't specifically classify.
@@ -292,8 +336,21 @@ def summarize(rows: list[dict]) -> dict:
     protocol_counts: dict[str, int] = {}
     talkers: dict[str, int] = {}
     dns_queries: list[str] = []
+    dns_query_log: list[dict] = []
     total_bytes = 0
     lan_packets = 0
+    icmp_stats = {"echo_request": 0, "echo_reply": 0, "other": 0}
+
+    # (client_ip, server_ip, port) -> {"syn": bool, "syn_ack": bool, "ack": bool}
+    # Tracks each TCP connection attempt's 3-way handshake progress so we can
+    # report which ones actually completed vs stalled/were reset.
+    handshakes: dict[tuple, dict] = {}
+
+    # source_ip -> set of distinct destination ports it contacted this
+    # window — the basis for port-scan detection below. A normal browsing
+    # session touches a handful of ports (80/443/53); an nmap-style scan
+    # touches dozens to thousands in seconds.
+    dest_ports_by_source: dict[str, set] = {}
 
     # device_ip -> {"mac": str|None, "activity": {label: count}, "packets": int}
     devices: dict[str, dict] = {}
@@ -319,13 +376,80 @@ def summarize(rows: list[dict]) -> dict:
         if proto == "DNS" and row["info"].startswith("Standard query for "):
             dns_queries.append(row["info"].replace("Standard query for ", ""))
 
+        # Structured DNS query log — only queries (not responses), so each
+        # lookup a device made appears once with the domain it asked for.
+        if proto == "DNS" and row.get("dns_query"):
+            dns_query_log.append({
+                "time": row.get("timestamp"),
+                "domain": row.get("dns_domain", "?"),
+                "type": row.get("dns_qtype", "?"),
+                "source": row.get("src_ip"),
+                "dns_server": row.get("dns_server"),
+            })
+
+        if proto == "ICMP":
+            kind = row.get("icmp_kind", "other")
+            icmp_stats[kind] = icmp_stats.get(kind, 0) + 1
+
+        # TCP handshake tracking: SYN opens an attempt keyed by
+        # (client, server, port); SYN-ACK and the closing ACK update the
+        # same entry so we can report which handshakes fully completed.
+        step = row.get("handshake_step")
+        if step and row.get("dst_port") is not None:
+            if step == "SYN":
+                key = (row["src_ip"], row["dst_ip"], row["dst_port"])
+                handshakes[key] = handshakes.setdefault(key, {"syn": False, "syn_ack": False, "ack": False})
+                handshakes[key]["syn"] = True
+            elif step == "SYN-ACK":
+                # SYN-ACK travels server -> client, so the connection's
+                # client/server/port key uses the *destination* as client.
+                key = (row["dst_ip"], row["src_ip"], row["src_port"])
+                handshakes[key] = handshakes.setdefault(key, {"syn": False, "syn_ack": False, "ack": False})
+                handshakes[key]["syn_ack"] = True
+            elif step == "ACK":
+                key = (row["src_ip"], row["dst_ip"], row["dst_port"])
+                if key in handshakes:
+                    handshakes[key]["ack"] = True
+
         activity = row.get("activity", "Other")
         dst_ip = row.get("dst_ip")
         touch_device(src_ip, row.get("src_mac"), activity)
         if dst_ip:
             touch_device(dst_ip, row.get("dst_mac"), activity)
 
+        # Port-scan tracking: record every distinct destination port a
+        # source IP contacted this window, TCP or UDP alike (both SYN scans
+        # and UDP scans present the same way — one source, many ports).
+        dst_port = row.get("dst_port")
+        if dst_port is not None:
+            dest_ports_by_source.setdefault(src_ip, set()).add(dst_port)
+
     top_talkers = sorted(talkers.items(), key=lambda kv: kv[1], reverse=True)[:5]
+
+    # Flag any source that touched an unusually large number of distinct
+    # destination ports — the classic signature of an nmap-style port scan.
+    # Normal browsing/app traffic rarely exceeds a handful of ports; this
+    # threshold is deliberately simple and explainable rather than
+    # statistically tuned, which matters for a course demo where you need
+    # to justify *why* something was flagged.
+    PORT_SCAN_THRESHOLD = 15
+    port_scan_alerts = [
+        {"source": ip, "distinct_ports": len(ports), "sample_ports": sorted(ports)[:20]}
+        for ip, ports in dest_ports_by_source.items()
+        if len(ports) >= PORT_SCAN_THRESHOLD
+    ]
+    port_scan_alerts.sort(key=lambda a: a["distinct_ports"], reverse=True)
+
+    tcp_handshake_list = [
+        {
+            "client": key[0], "server": key[1], "port": key[2],
+            "status": "COMPLETE" if state["syn"] and state["syn_ack"] and state["ack"]
+                      else "IN PROGRESS" if state["syn"] and state["syn_ack"]
+                      else "NO RESPONSE" if state["syn"]
+                      else "INCOMPLETE",
+        }
+        for key, state in handshakes.items()
+    ][:20]
 
     device_list = [
         {"ip": ip, "mac": d["mac"], "packets": d["packets"], "activity": d["activity"]}
@@ -339,5 +463,9 @@ def summarize(rows: list[dict]) -> dict:
         "protocol_counts": protocol_counts,
         "top_talkers": [{"ip": ip, "packets": count} for ip, count in top_talkers],
         "dns_queries": dns_queries[:20],
+        "dns_query_log": dns_query_log[:30],
+        "icmp_stats": icmp_stats,
+        "tcp_handshakes": tcp_handshake_list,
+        "port_scan_alerts": port_scan_alerts,
         "devices": device_list[:20],
     }

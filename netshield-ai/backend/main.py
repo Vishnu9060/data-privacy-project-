@@ -13,6 +13,7 @@ import mac_spoof
 import packet_analyzer
 import security_analyzer
 import report_generator
+import wifi_scanner
 
 app = FastAPI()
 
@@ -370,6 +371,16 @@ def _host_scan(target: str) -> dict:
 @app.get("/host-scan")
 def host_scan(target: str = ""):
     return _host_scan(target)
+
+
+@app.get("/wifi-scan")
+def wifi_scan():
+    """Scan for nearby Wi-Fi access points and their security posture.
+
+    Network-level only (SSID/BSSID/encryption of the access point itself) —
+    does not enumerate or track individual client devices connected to it.
+    """
+    return wifi_scanner.scan_networks()
 
 
 def _os_key() -> str:

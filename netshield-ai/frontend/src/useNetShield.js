@@ -19,6 +19,12 @@ export default function useNetShield() {
   // discovered host (nmap OS detection is slow per host).
   const [hostScans, setHostScans] = useState({}) // ip -> { loading, error, data }
 
+  const [wifiNetworks, setWifiNetworks] = useState(null)
+  const [wifiSummary, setWifiSummary] = useState(null)
+  const [wifiRogueAlerts, setWifiRogueAlerts] = useState(null)
+  const [wifiLoading, setWifiLoading] = useState(false)
+  const [wifiError, setWifiError] = useState(null)
+
   const [packets, setPackets] = useState(null)
   const [packetSummary, setPacketSummary] = useState(null)
   const [packetsLoading, setPacketsLoading] = useState(false)
@@ -62,6 +68,31 @@ export default function useNetShield() {
       setError('Failed to reach backend: ' + err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Scan for nearby Wi-Fi access points and their security posture
+  // (network-level only — never enumerates who is connected to them).
+  const handleWifiScan = async () => {
+    setWifiLoading(true)
+    setWifiError(null)
+    setWifiNetworks(null)
+    setWifiSummary(null)
+    setWifiRogueAlerts(null)
+
+    try {
+      const response = await axios.get(`${API}/wifi-scan`)
+      if (response.data.error) {
+        setWifiError(response.data.error)
+      } else {
+        setWifiNetworks(response.data.networks)
+        setWifiSummary(response.data.summary)
+        setWifiRogueAlerts(response.data.rogue_alerts || [])
+      }
+    } catch (err) {
+      setWifiError('Failed to reach backend: ' + err.message)
+    } finally {
+      setWifiLoading(false)
     }
   }
 
@@ -360,6 +391,7 @@ export default function useNetShield() {
 
   return {
     devices, scanNote, loading, error, handleScan,
+    wifiNetworks, wifiSummary, wifiRogueAlerts, wifiLoading, wifiError, handleWifiScan,
     hostScans, handleHostScan,
     packets, packetSummary, packetsLoading, packetsError,
     protocolFilter, setProtocolFilter,
