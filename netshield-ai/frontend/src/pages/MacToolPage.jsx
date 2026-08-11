@@ -74,7 +74,7 @@ export default function MacToolPage({ net }) {
         {macChangeResult && (
           <p className={macChangeResult.success ? 'status-success' : 'status-error'}>
             {macChangeResult.interface}: {macChangeResult.before_mac} → {macChangeResult.after_mac}{' '}
-            {macChangeResult.success ? '(verified)' : '(verification failed — check backend privileges)'}
+            {macChangeResult.success ? '(verified)' : "(adapter didn't report the new address — its driver likely doesn't support MAC spoofing)"}
           </p>
         )}
 

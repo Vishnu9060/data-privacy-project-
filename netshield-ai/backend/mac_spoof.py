@@ -27,6 +27,9 @@ import random
 import re
 import subprocess
 
+if platform.system() == "Windows":
+    import ctypes
+
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 
@@ -98,7 +101,6 @@ def _linux_permanent_mac(interface: str) -> str:
     return current.upper()
 
 
-
 # Not every Windows NIC driver *advertises* NetworkAddress as a configurable
 # "advanced property" — Set-NetAdapterAdvancedProperty only works when it
 # does, and fails with a CIM "No matching ... objects found" error otherwise
@@ -111,6 +113,31 @@ def _linux_permanent_mac(interface: str) -> str:
 # writing the registry key directly when that specific "not advertised"
 # error occurs — other failures (e.g. permission denied) are surfaced as-is.
 _NET_CLASS_GUID = "{4d36e972-e325-11ce-bfc1-08002be10318}"
+
+
+def _is_windows_elevated() -> bool:
+    """Whether *this Python process* is running as Administrator.
+
+    Every NetAdapter cmdlet used here (Set-NetAdapterAdvancedProperty,
+    Disable/Enable-NetAdapter, writing HKLM) requires elevation. PowerShell
+    is spawned as a child of this process and inherits its access token, so
+    if uvicorn itself wasn't started from an elevated shell, no amount of
+    retrying in the child PowerShell will help — checking here up front
+    turns a wall of CIM/"Access is denied" stack traces into one clear,
+    actionable message.
+    """
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+_NOT_ELEVATED_MESSAGE = (
+    "The backend is not running with Administrator privileges. Changing a Windows "
+    "network adapter's MAC address requires elevation. Close the backend, then open "
+    "PowerShell or Command Prompt as Administrator (right-click it -> 'Run as "
+    "administrator') and start it again from there (e.g. 'uvicorn main:app --reload')."
+)
 
 
 def _windows_ps_body(interface: str, mac_no_colons: str) -> str:
@@ -137,7 +164,8 @@ try {{
             Set-ItemProperty -Path $key.PSPath -Name NetworkAddress -Value $mac -Type String
         }}
     }} catch {{
-        Write-Error "NOT_SUPPORTED: This adapter's driver does not support MAC address spoofing on Windows ($($err.Exception.Message))"
+        $fallbackErr = $_
+        Write-Error "NOT_SUPPORTED: This adapter's driver does not support MAC address spoofing on Windows (advanced-property attempt: $($err.Exception.Message) | registry fallback attempt: $($fallbackErr.Exception.Message))"
         exit 1
     }}
 }}
@@ -156,24 +184,29 @@ if (-not [string]::IsNullOrEmpty($mac)) {{
 
 
 def _windows_run(interface: str, mac_no_colons: str) -> None:
+    if not _is_windows_elevated():
+        raise MacSpoofError(_NOT_ELEVATED_MESSAGE)
+
     result = _run(["powershell", "-NoProfile", "-Command", _windows_ps_body(interface, mac_no_colons)])
     if result.returncode != 0:
         message = result.stderr.strip() or result.stdout.strip()
         if "NOT_SUPPORTED:" in message:
             message = message.split("NOT_SUPPORTED:", 1)[1].strip()
             raise MacSpoofError(
-                f"{message} Try a different physical Wi-Fi/Ethernet adapter from the list — "
+                f"{message} Try a different physical Wi-Fi/Ethernet adapter from the list - "
                 f"virtual adapters (VPN, Hyper-V, USB dongles) commonly lack this driver support."
             )
+        if "Access is denied" in message or "PermissionDenied" in message:
+            # Seen even when _is_windows_elevated() reported True — e.g. a
+            # managed/corporate machine whose group policy blocks NIC
+            # changes outright. Surface the elevation guidance either way,
+            # since re-running elevated is the first thing to rule out.
+            raise MacSpoofError(f"{_NOT_ELEVATED_MESSAGE}\n\nOriginal error: {message}")
         raise MacSpoofError(f"PowerShell command failed: {message}")
 
 
 def _windows_set_mac(interface: str, new_mac: str) -> None:
     _windows_run(interface, new_mac.replace(":", ""))
-
-
-def _windows_restore_mac(interface: str) -> None:
-    _windows_run(interface, "")
 
 
 def _macos_set_mac(interface: str, new_mac: str) -> None:
@@ -235,8 +268,21 @@ def restore_mac_address(interface: str) -> str:
             _windows_set_mac(interface, remembered)
             _original_macs.pop(interface, None)
             return remembered
-        _windows_restore_mac(interface)
-        return ""  # Windows doesn't expose the permanent MAC as easily; caller re-reads it
+        # Nothing recorded for this interface in this backend session (it
+        # was never successfully spoofed, the spoof attempt failed before
+        # reaching set_mac_address()'s bookkeeping step, or the backend
+        # restarted). Windows exposes no "permanent hardware address"
+        # lookup the way Linux's ethtool -P does, so there is no reliable
+        # value to restore to — clearing the registry override blindly
+        # would silently no-op on unsupported adapters and misleadingly
+        # look like a privilege failure. Matches macOS's behavior below.
+        raise MacSpoofError(
+            f"No spoofed MAC is on record for '{interface}' in this backend session - "
+            f"there's nothing to restore. If you already tried 'Randomize MAC' and it "
+            f"failed, this adapter's driver doesn't support MAC spoofing on Windows "
+            f"(common for Wi-Fi and virtual adapters); if the backend was restarted since "
+            f"a successful randomize, the original address is no longer remembered."
+        )
     elif system == "Darwin":
         if remembered:
             _macos_set_mac(interface, remembered)
