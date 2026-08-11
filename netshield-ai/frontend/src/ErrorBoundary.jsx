@@ -14,7 +14,7 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    console.error('NETSEC AI crashed:', error, info)
+    console.error('ShopRadar crashed:', error, info)
   }
 
   render() {

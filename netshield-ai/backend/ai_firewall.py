@@ -115,7 +115,7 @@ def generate_ai_recommendations(findings: list[dict], os_name: str = "linux") ->
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
-            "User-Agent": "NetShield-AI/1.0",
+            "User-Agent": "ShopRadar/1.0",
         },
         method="POST",
     )

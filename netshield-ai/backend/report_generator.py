@@ -1,5 +1,5 @@
 """
-Report generation for NetShield AI.
+Report generation for ShopRadar.
 
 Produces a structured report from the results of all four modules
 (Network Discovery, Packet Analysis, Privacy Lab, Security Analysis):

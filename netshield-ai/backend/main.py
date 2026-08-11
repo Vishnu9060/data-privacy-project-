@@ -79,7 +79,7 @@ def _detect_network_range() -> tuple[str, bool]:
 
 @app.get("/")
 def read_root():
-    return {"message": "NetShield AI backend is running"}
+    return {"message": "ShopRadar backend is running"}
 
 
 @app.get("/scan")

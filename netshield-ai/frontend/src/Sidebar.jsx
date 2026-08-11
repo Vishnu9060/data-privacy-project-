@@ -26,8 +26,8 @@ export default function Sidebar({ activePage, onNavigate, currentMac, onRandomiz
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
-        <span className="brand-mark">Σ</span>
-        NETSEC AI
+        <span className="brand-mark">◎</span>
+        SHOPRADAR
       </div>
 
       {NAV_GROUPS.map((group) => (

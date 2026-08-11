@@ -346,7 +346,7 @@ export default function useNetShield() {
          <tbody>${findingsRows}</tbody></table>`
       : ''
 
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>NETSEC AI Report</title>
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>ShopRadar Report</title>
       <style>
         body { font-family: 'Courier New', monospace; color:#1e293b; margin:32px; line-height:1.5; }
         h1 { color:#7c3aed; margin-bottom:4px; }
@@ -358,7 +358,7 @@ export default function useNetShield() {
         th,td { border:1px solid #e2e8f0; padding:8px; text-align:left; vertical-align:top; }
         th { background:#f8fafc; }
       </style></head><body>
-      <h1>NETSEC AI — Security &amp; Privacy Report</h1>
+      <h1>ShopRadar — Security &amp; Footfall Report</h1>
       <p class="meta">Generated: ${esc(r.timestamp)} · Summary by: ${esc(r.summary_source === 'groq' ? 'Groq AI' : 'built-in analyzer')}</p>
       <div class="overall">${esc(r.summary.overall)}</div>
       <h2>Metrics</h2>

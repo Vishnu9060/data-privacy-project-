@@ -101,7 +101,7 @@ def generate_ai_summary(metrics: dict, template_summary: dict) -> dict | None:
             "Authorization": f"Bearer {api_key}",
             # Groq's Cloudflare edge rejects the default "Python-urllib" agent
             # with a 403 (error 1010); send a normal UA so the request passes.
-            "User-Agent": "NetShield-AI/1.0",
+            "User-Agent": "ShopRadar/1.0",
         },
         method="POST",
     )
