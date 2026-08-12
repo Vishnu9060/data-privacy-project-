@@ -8,17 +8,27 @@ sighting", which is itself a privacy violation and out of scope for a
 defensive security/privacy tool. A BSSID here identifies a router/access
 point, not a person's phone or laptop.
 
-Uses `nmcli` (NetworkManager CLI, present on virtually every modern Linux
-desktop) in terse mode for reliable, delimiter-based parsing. No raw-socket
-access or root privileges needed — a normal Wi-Fi scan.
+Cross-platform: dispatches to the OS-native scan command via
+`platform.system()`, same pattern as mac_spoof.py.
+
+- Linux:   `nmcli` (NetworkManager CLI, present on virtually every modern
+           Linux desktop) in terse mode for reliable, delimiter-based
+           parsing. No raw-socket access or root privileges needed.
+- Windows: `netsh wlan show networks mode=bssid`, present on every Windows
+           install with a Wi-Fi adapter. No admin privileges needed.
+- macOS:   the `airport` utility (bundled with every macOS Wi-Fi driver,
+           though Apple has deprecated it in some releases). Falls back to
+           a clear error if it's missing.
 """
 
+import platform
+import re
 import subprocess
 
-# Risk classification per security type nmcli reports. Open networks have no
-# encryption at all (anyone can read all traffic); WEP is a broken cipher
-# broken in minutes with commodity tools; WPA (1) has known weaknesses;
-# WPA2/WPA3 are the current reasonable-to-good standards.
+# Risk classification per security type reported by the OS scan. Open
+# networks have no encryption at all (anyone can read all traffic); WEP is a
+# broken cipher broken in minutes with commodity tools; WPA (1) has known
+# weaknesses; WPA2/WPA3 are the current reasonable-to-good standards.
 SECURITY_RISK = {
     "":      ("HIGH",   "Open network — no encryption. All traffic is readable by anyone in range."),
     "--":    ("HIGH",   "Open network — no encryption. All traffic is readable by anyone in range."),
@@ -31,9 +41,9 @@ SECURITY_RISK = {
 
 def _classify_security(security: str) -> tuple[str, str]:
     security = (security or "").strip()
-    # nmcli reports combinations like "WPA2 WPA3" (transition mode) or
-    # "WPA1 WPA2"; classify by the strongest cipher actually offered as a
-    # fallback (an attacker downgrades to the weakest one advertised), but
+    # Scan tools report combinations like "WPA2 WPA3" (transition mode) or
+    # "WPA2-Personal"; classify by the strongest cipher actually offered as
+    # a fallback (an attacker downgrades to the weakest one advertised), but
     # note the mode for transparency.
     if "WEP" in security:
         return SECURITY_RISK["WEP"]
@@ -46,14 +56,6 @@ def _classify_security(security: str) -> tuple[str, str]:
     return SECURITY_RISK[""]
 
 
-def _parse_freq_mhz(freq: str) -> int | None:
-    # nmcli reports e.g. "2412 MHz"
-    try:
-        return int(freq.strip().split()[0])
-    except (ValueError, IndexError):
-        return None
-
-
 def _band_for_freq(freq_mhz: int | None) -> str:
     if freq_mhz is None:
         return "unknown"
@@ -62,6 +64,23 @@ def _band_for_freq(freq_mhz: int | None) -> str:
     if freq_mhz < 6000:
         return "5GHz"
     return "6GHz"
+
+
+def _channel_to_freq_mhz(channel: int | None) -> int | None:
+    """Approximate center frequency from a Wi-Fi channel number.
+
+    Used on platforms (Windows) whose scan tool reports channel but not
+    frequency directly. Good enough for 2.4/5/6GHz band classification.
+    """
+    if channel is None:
+        return None
+    if channel == 14:
+        return 2484
+    if 1 <= channel <= 13:
+        return 2407 + channel * 5
+    if channel < 200:
+        return 5000 + channel * 5
+    return 5950 + channel * 5
 
 
 def _detect_rogue_aps(networks: list[dict]) -> list[dict]:
@@ -153,8 +172,9 @@ def _detect_rogue_aps(networks: list[dict]) -> list[dict]:
     return alerts
 
 
-def scan_networks() -> dict:
-    """Scan for nearby Wi-Fi access points and classify each by security risk."""
+def _scan_linux() -> list[dict] | dict:
+    """Scan via `nmcli`. Returns a list of raw network dicts, or an
+    {"error": ...} dict on failure."""
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,CHAN,FREQ,BSSID", "dev", "wifi", "list"],
@@ -169,8 +189,6 @@ def scan_networks() -> dict:
         return {"error": f"Wi-Fi scan failed: {result.stderr.strip() or 'unknown nmcli error'}"}
 
     networks = []
-    seen_bssids = set()
-
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
@@ -197,23 +215,220 @@ def scan_networks() -> dict:
             continue
         ssid, signal, security, chan, freq, bssid = fields[:6]
 
-        if bssid in seen_bssids:
-            continue  # duplicate scan entry for the same AP
-        seen_bssids.add(bssid)
-
-        risk, reason = _classify_security(security)
-        freq_mhz = _parse_freq_mhz(freq)
+        # nmcli reports e.g. "2412 MHz"
+        try:
+            freq_mhz = int(freq.strip().split()[0])
+        except (ValueError, IndexError):
+            freq_mhz = None
 
         networks.append({
             "ssid": ssid or "(hidden network)",
             "bssid": bssid,
             "signal": int(signal) if signal.isdigit() else None,
+            "security": security,
+            "channel": chan,
+            "freq_mhz": freq_mhz,
+        })
+
+    return networks
+
+
+def _scan_windows() -> list[dict] | dict:
+    """Scan via `netsh wlan show networks mode=bssid`. Returns a list of raw
+    network dicts, or an {"error": ...} dict on failure."""
+    try:
+        result = subprocess.run(
+            ["netsh", "wlan", "show", "networks", "mode=bssid"],
+            capture_output=True, text=True, timeout=20, errors="replace",
+        )
+    except FileNotFoundError:
+        return {"error": "netsh not found. Wi-Fi scanning requires the Windows netsh utility."}
+    except subprocess.TimeoutExpired:
+        return {"error": "Wi-Fi scan timed out."}
+
+    combined = f"{result.stdout}\n{result.stderr}"
+    if "location permission" in combined.lower() or "location services" in combined.lower():
+        return {
+            "error": "Wi-Fi scanning needs Windows Location services turned on for network "
+            "shell commands. Enable it at Settings > Privacy & security > Location "
+            "(or run: start ms-settings:privacy-location), then try again."
+        }
+    if "requires elevation" in combined.lower():
+        return {"error": "Wi-Fi scan requires administrator privileges. Restart the backend as an administrator and try again."}
+
+    if result.returncode != 0:
+        return {"error": f"Wi-Fi scan failed: {(result.stderr or result.stdout).strip() or 'unknown netsh error'}"}
+
+    output = result.stdout
+    if "no wireless interface" in output.lower():
+        return {"error": "No wireless interface found. Is Wi-Fi hardware present and enabled?"}
+
+    networks: list[dict] = []
+    ssid = None
+    security = ""
+    bssid = None
+    signal = None
+    channel = None
+
+    def flush_bssid():
+        if bssid is not None:
+            networks.append({
+                "ssid": ssid or "(hidden network)",
+                "bssid": bssid,
+                "signal": signal,
+                "security": security,
+                "channel": str(channel) if channel is not None else "",
+                "freq_mhz": _channel_to_freq_mhz(channel),
+            })
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+
+        m = re.match(r"^SSID\s+\d+\s*:\s*(.*)$", line)
+        if m:
+            flush_bssid()
+            ssid = m.group(1).strip()
+            security, bssid, signal, channel = "", None, None, None
+            continue
+
+        m = re.match(r"^Authentication\s*:\s*(.*)$", line)
+        if m:
+            auth = m.group(1).strip()
+            security = "" if auth.lower() == "open" else auth
+            continue
+
+        m = re.match(r"^BSSID\s+\d+\s*:\s*(.*)$", line)
+        if m:
+            flush_bssid()
+            bssid = m.group(1).strip()
+            signal, channel = None, None
+            continue
+
+        m = re.match(r"^Signal\s*:\s*(\d+)\s*%$", line)
+        if m:
+            signal = int(m.group(1))
+            continue
+
+        m = re.match(r"^Channel\s*:\s*(\d+)$", line)
+        if m:
+            channel = int(m.group(1))
+            continue
+
+    flush_bssid()
+    return networks
+
+
+def _scan_macos() -> list[dict] | dict:
+    """Scan via Apple's (deprecated but still widely present) `airport`
+    utility. Returns a list of raw network dicts, or an {"error": ...} dict
+    on failure."""
+    airport = (
+        "/System/Library/PrivateFrameworks/Apple80211.framework/"
+        "Versions/Current/Resources/airport"
+    )
+    try:
+        result = subprocess.run(
+            [airport, "-s"], capture_output=True, text=True, timeout=20,
+        )
+    except FileNotFoundError:
+        return {
+            "error": "airport utility not found. Recent macOS versions restrict Wi-Fi "
+            "scanning from the command line; try enabling Location Services for "
+            "Terminal, or scan from System Settings > Wi-Fi instead."
+        }
+    except subprocess.TimeoutExpired:
+        return {"error": "Wi-Fi scan timed out."}
+
+    if result.returncode != 0:
+        return {"error": f"Wi-Fi scan failed: {result.stderr.strip() or 'unknown airport error'}"}
+
+    lines = result.stdout.splitlines()
+    if not lines:
+        return []
+
+    # Header: "SSID BSSID RSSI CHANNEL HT CC SECURITY (auth/unicast/group)"
+    # Columns are whitespace-aligned but SSID can contain spaces, so we
+    # locate each column by its header's start offset instead of splitting.
+    header = lines[0]
+    col_names = ["SSID", "BSSID", "RSSI", "CHANNEL", "HT", "CC", "SECURITY"]
+    offsets = []
+    for name in col_names:
+        idx = header.find(name)
+        if idx == -1:
+            return {"error": "Unrecognized airport output format."}
+        offsets.append(idx)
+    offsets.append(len(header) + 1000)  # sentinel end for the last column
+
+    networks = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        values = []
+        for i in range(len(col_names)):
+            values.append(line[offsets[i]:offsets[i + 1]].strip())
+        ssid, bssid, rssi, channel, _ht, _cc, security = values
+
+        # e.g. "36" or "36,+1" (extension channel) — keep the primary number.
+        channel_num = channel.split(",")[0].strip()
+        try:
+            freq_mhz = _channel_to_freq_mhz(int(channel_num))
+        except ValueError:
+            freq_mhz = None
+
+        try:
+            signal = int(rssi)
+        except ValueError:
+            signal = None
+
+        networks.append({
+            "ssid": ssid or "(hidden network)",
+            "bssid": bssid,
+            "signal": signal,
+            "security": "" if security.upper() in ("NONE", "") else security,
+            "channel": channel_num,
+            "freq_mhz": freq_mhz,
+        })
+
+    return networks
+
+
+def scan_networks() -> dict:
+    """Scan for nearby Wi-Fi access points and classify each by security risk."""
+    system = platform.system()
+    if system == "Windows":
+        raw = _scan_windows()
+    elif system == "Darwin":
+        raw = _scan_macos()
+    elif system == "Linux":
+        raw = _scan_linux()
+    else:
+        return {"error": f"Wi-Fi scanning is not supported on this operating system ({system})."}
+
+    if isinstance(raw, dict):  # {"error": ...}
+        return raw
+
+    networks = []
+    seen_bssids = set()
+
+    for entry in raw:
+        bssid = entry["bssid"]
+        if not bssid or bssid in seen_bssids:
+            continue  # duplicate scan entry for the same AP (or unparseable)
+        seen_bssids.add(bssid)
+
+        security = entry["security"]
+        risk, reason = _classify_security(security)
+
+        networks.append({
+            "ssid": entry["ssid"],
+            "bssid": bssid,
+            "signal": entry["signal"],
             "security": security or "Open",
             "risk": risk,
             "reason": reason,
-            "channel": chan,
-            "band": _band_for_freq(freq_mhz),
-            "freq_mhz": freq_mhz,
+            "channel": entry["channel"],
+            "band": _band_for_freq(entry["freq_mhz"]),
+            "freq_mhz": entry["freq_mhz"],
         })
 
     networks.sort(key=lambda n: n["signal"] or 0, reverse=True)
